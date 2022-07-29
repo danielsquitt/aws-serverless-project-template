@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  install:
+    on-failure: ABORT
+    commands:
+      - echo Installing Serverless ...
+      - npm install -g serverless
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - echo Installing source NPM dependencies
+      - npm install
+  build:
+    on-failure: ABORT
+    commands:
+      - echo Packaging started on `date`
+      - echo Packaging with Serverless Framework stage $ENV_NAME
+      - echo Packagin to $S3_BUCKET
+      - serverless package --verbose --stage $ENV_NAME --package $ENV_NAME --s3-bucket $S3_BUCKET --s3-path $APP_NAME/$ENV_NAME
+  post_build:
+    on-failure: ABORT
+    commands:
+      - echo Deployment completed on `date`
+
+artifacts:
+  files:
+    - $ENV_NAME/*
+  secondary-artifacts:
+    BuidCodeId:
+      files:
+        - $ENV_NAME/*
+      name: $S3_BUCKET
