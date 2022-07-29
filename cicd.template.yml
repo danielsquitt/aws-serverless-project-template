@@ -1,0 +1,311 @@
+# Defined two pipelines. One for granch "master" and an other for brach "dev"
+# Defined all other resources needed due the pipeline to work
+# Required params
+#   - layer: service layer
+#   - app: Application name
+#   - bucket: Deplyment bucket
+#   - repo: Repository
+#   - roleArn: Pipeliene role arn
+######################################################################
+service: cicd
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs16.x
+  region: eu-west-1
+  stage: prod
+  stackName: ${self:service}-${param:app}-${param:layer}
+  tags:
+    layer: ${param:layer}
+    type: cicd
+  stackTags:
+    layer: ${param:layer}
+    type: cicd
+  deploymentPrefix: ${param:layer}
+  deploymentBucket:
+    name: ${param:bucket}
+
+custom:
+  appName: ${param:app}
+  repoName: ${param:repo}
+  changeSetName: ${self:custom.appName}-${self:provider.tags.layer}-change-set
+  stackName: ${self:custom.appName}-app-${self:provider.tags.layer}
+  roleArn: ${param:roleArn}
+  layer: ${param:layer}
+
+resources:
+  Resources:  
+    
+    # NOTIFICATIONS
+    ######################################################################
+    PipelineNotificationsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        DisplayName: ${self:provider.stackName}-notifications
+
+    # BUCKETS
+    ######################################################################
+
+    # Pipeline Artefact Bucket
+    PipelineBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${param:app}-${self:service}-${param:layer}-pipelinebucket-${sls:instanceId}
+        AccessControl: Private
+
+    # PIPELINE MASTER
+    ######################################################################
+    # Pipeline
+    Pipeline:
+      Type: AWS::CodePipeline::Pipeline
+      Properties:
+        Name: ${self:custom.stackName}-${self:custom.layer}-master-pipeline
+        RoleArn: ${self:custom.roleArn}
+        Stages:
+          - Name: Source
+            Actions:
+              - Name: Source
+                RunOrder: 1
+                ActionTypeId:
+                  Category: Source
+                  Provider: CodeCommit
+                  Owner: AWS
+                  Version: '1'
+                OutputArtifacts:
+                  - Name: Source
+                Configuration:
+                  RepositoryName: ${self:custom.repoName}
+                  BranchName: master
+          - Name: DeployToPreprod
+            Actions:
+              - Name: Build
+                RunOrder: 1
+                ActionTypeId:
+                  Category: Build
+                  Provider: CodeBuild
+                  Owner: AWS
+                  Version: '1'
+                InputArtifacts:
+                  - Name: Source
+                OutputArtifacts:
+                  - Name: TemplatePreprod
+                Configuration:
+                  ProjectName: 
+                    Ref: BuildProject
+                  EnvironmentVariables: '[{"name":"ENV_NAME","value":"prod","type":"PLAINTEXT"}]'
+              - Name: CreateChangeSet
+                RunOrder: 2
+                InputArtifacts:
+                  - Name: TemplatePreprod
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_REPLACE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-preprod
+                  RoleArn: ${self:custom.roleArn}
+                  StackName:  ${self:custom.stackName}-preprod
+                  TemplatePath: Template::preprod/cloudformation-template-update-stack.json
+                RoleArn: ${self:custom.roleArn}
+              - Name: DeployChangeSet
+                RunOrder: 3
+                InputArtifacts:
+                  - Name: TemplatePreprod
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_EXECUTE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-preprod
+                  RoleArn: ${self:custom.roleArn}
+                  StackName: ${self:custom.stackName}-preprod
+                RoleArn: ${self:custom.roleArn}
+          - Name: Aproval
+            Actions:  
+            - Name: Approval
+              RunOrder: 1
+              ActionTypeId:
+                Category: Approval
+                Provider: Manual
+                Owner: AWS
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref PipelineNotificationsTopic 
+          - Name: DeployToProd
+            Actions:
+              - Name: Build
+                RunOrder: 1
+                ActionTypeId:
+                  Category: Build
+                  Provider: CodeBuild
+                  Owner: AWS
+                  Version: '1'
+                InputArtifacts:
+                  - Name: Source
+                OutputArtifacts:
+                  - Name: TemplateProd
+                Configuration:
+                  ProjectName: 
+                    Ref: BuildProject
+                  EnvironmentVariables: '[{"name":"ENV_NAME","value":"prod","type":"PLAINTEXT"}]'
+              - Name: CreateChangeSet
+                RunOrder: 2
+                InputArtifacts:
+                  - Name: TemplateProd
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_REPLACE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-prod
+                  RoleArn: ${self:custom.roleArn}
+                  StackName:  ${self:custom.stackName}-prod
+                  TemplatePath: Template::prod/cloudformation-template-update-stack.json
+                RoleArn: ${self:custom.roleArn}
+              - Name: DeployChangeSet
+                RunOrder: 3
+                InputArtifacts:
+                  - Name: TemplateProd
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_EXECUTE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-prod
+                  RoleArn: ${self:custom.roleArn}
+                  StackName: ${self:custom.stackName}-prod
+                RoleArn: ${self:custom.roleArn} 
+        ArtifactStore:
+          Type: S3
+          Location: 
+            Ref: PipelineBucket   
+
+    # PIPELINE DEV
+    ######################################################################
+    # Pipeline
+    PipelineDev:
+      Type: AWS::CodePipeline::Pipeline
+      Properties:
+        Name: ${self:custom.stackName}-dev-pipeline
+        RoleArn: ${self:custom.roleArn}
+        Stages:
+          - Name: Source
+            Actions:
+              - Name: Source
+                RunOrder: 1
+                ActionTypeId:
+                  Category: Source
+                  Provider: CodeCommit
+                  Owner: AWS
+                  Version: '1'
+                OutputArtifacts:
+                  - Name: Source
+                Configuration:
+                  RepositoryName: ${self:custom.appName}-${self:provider.tags.layer}
+                  BranchName: dev
+          - Name: DeployToDev
+            Actions:
+              - Name: Build
+                RunOrder: 1
+                ActionTypeId:
+                  Category: Build
+                  Provider: CodeBuild
+                  Owner: AWS
+                  Version: '1'
+                InputArtifacts:
+                  - Name: Source
+                OutputArtifacts:
+                  - Name: TemplDev
+                Configuration:
+                  ProjectName: 
+                    Ref: BuildProject
+                  EnvironmentVariables: '[{"name":"ENV_NAME","value":"dev","type":"PLAINTEXT"}]'
+              - Name: CreateChangeSet
+                RunOrder: 2
+                InputArtifacts:
+                  - Name: TemplDev
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_REPLACE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-dev
+                  RoleArn: ${self:custom.roleArn}
+                  StackName:  ${self:custom.stackName}-dev
+                  TemplatePath: TemplDev::dev/cloudformation-template-update-stack.json
+                RoleArn: ${self:custom.roleArn}
+              - Name: DeployChangeSet
+                RunOrder: 3
+                InputArtifacts:
+                  - Name: TemplDev
+                ActionTypeId:
+                  Category: Deploy
+                  Provider: CloudFormation
+                  Owner: AWS
+                  Version: '1'
+                Configuration:
+                  ActionMode: CHANGE_SET_EXECUTE
+                  Capabilities: CAPABILITY_NAMED_IAM
+                  ChangeSetName: ${self:custom.changeSetName}-dev
+                  RoleArn: ${self:custom.roleArn}
+                  StackName: ${self:custom.stackName}-dev
+                RoleArn: ${self:custom.roleArn}   
+        ArtifactStore:
+          Type: S3
+          Location: 
+            Ref: PipelineBucket   
+    
+    # BUILD PROYECT
+    ######################################################################
+    # Build proyect            
+    BuildProject:
+      Type: AWS::CodeBuild::Project
+      Properties:
+        Name: ${self:provider.stackName}-build
+        Description: Build proyect
+        Artifacts:
+          Type: CODEPIPELINE
+        ## SecondaryArtifacts: 
+        ##   - Type: S3
+        ##     Location: 
+        ##       Ref: PipelineBucket
+        ##     ArtifactIdentifier: BuidCodeId
+        ##     Name: ${self:custom.stackName}
+        Source:
+          Type: CODEPIPELINE
+          BuildSpec: buildspec.yml
+        Environment:
+          ComputeType: BUILD_GENERAL1_SMALL
+          Type: LINUX_CONTAINER
+          Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+          EnvironmentVariables: 
+            - Name: APP_NAME
+              Type: PLAINTEXT
+              Value: ${self:custom.stackName}
+            - Name: S3_BUCKET
+              Type: PLAINTEXT
+              Value: 
+                Ref: PipelineBucket
+        ServiceRole: ${self:custom.roleArn}
+
+  Outputs:
+    ServerlessDeploymentBucketName:
+      Export: 
+        Name: ${self:provider.stackName}-ServerlessDeploymentBucket

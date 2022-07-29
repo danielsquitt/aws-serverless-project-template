@@ -1,0 +1,97 @@
+service: base-services
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs16.x
+  region: eu-west-1
+  stage: prod
+  stackName: ${param:app}-${self:service}
+  tags:
+    layer: services
+
+custom:
+  backendRepoName: ${param:app}-backend
+  frontendRepoName: ${param:app}-frontend
+  servicesRepoName: ${param:app}-services
+
+  deployment_bucket_name: ${param:app}-services
+
+resources:
+  Resources:  
+
+    # SOURCES
+    ######################################################################
+    # Backend Code Repository
+    BackendRepo:
+      Type: AWS::CodeCommit::Repository
+      Properties:
+        RepositoryName: ${self:custom.backendRepoName}
+        RepositoryDescription: Backend application repository
+    
+    # Frontend Code Repository
+    FrontendRepo:
+      Type: AWS::CodeCommit::Repository
+      Properties:
+        RepositoryName: ${self:custom.frontendRepoName}
+        RepositoryDescription: Frontend application repository
+    
+    # Services Repository
+    ServicesRepo:
+      Type: AWS::CodeCommit::Repository
+      Properties:
+        RepositoryName: ${self:custom.servicesRepoName}
+        RepositoryDescription: Frontend application repository
+
+     # ROLES
+    ######################################################################
+    # Pipeline Role
+    PipelineRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:provider.stackName}-CodePipelineDeploymentRole
+        Path: /
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - codepipeline.amazonaws.com
+                  - codebuild.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AdministratorAccess
+
+  Outputs:
+    BackendRepository:
+      Description: Backend repository name
+      Value: ${self:custom.backendRepoName}
+      Export: 
+        Name: ${param:app}-${self:service}:${sls:stage}:BackendRepositoryName
+
+    FrontendRepository:
+      Description: Frontend repository name
+      Value: ${self:custom.frontendRepoName}
+      Export: 
+        Name: ${param:app}-${self:service}:${sls:stage}:FrontendRepositoryName
+
+    ServicesRepository:
+      Description: Services repository name
+      Value: ${self:custom.servicesRepoName}
+      Export: 
+        Name: ${param:app}-${self:service}:${sls:stage}:ServicesRepositoryName
+
+    ApplicationName:
+      Description: Application name
+      Value: ${param:app}
+      Export: 
+        Name: ApplicationName
+
+    PipelineRoleArn:
+      Description: Pipeline role arn
+      Value: 
+        Fn::GetAtt: [PipelineRole, Arn]
+      Export: 
+        Name: PipelineRoleArn
